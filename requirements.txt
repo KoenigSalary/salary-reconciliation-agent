@@ -1,18 +1,17 @@
-# ---- Dashboard / reconciliation core (Streamlit Cloud) ----
-streamlit==1.41.1
-pandas==2.2.3
-numpy==1.26.4
-openpyxl==3.1.5
-lxml==5.2.2
-beautifulsoup4==4.12.3
-html5lib==1.1
-python-dateutil==2.8.2
-python-dotenv==1.0.0
-
-# Insurance: pandas needs xlrd for a genuine BIFF .xls workbook. The current RMS
-# exports do not need it (salary = HTML, bank = TSV, TDS/EPF = .xlsx), but this
-# is what makes a real .xls readable if RMS ever ships one.
-xlrd==2.0.1
+# ---- Dashboard / reconciliation core (Streamlit Community Cloud) ----
+# Version floors, not hard pins: Streamlit Cloud's Python version varies, and a
+# hard pin on numpy/lxml breaks the build on Python 3.13 (no wheels -> pip tries
+# to compile from source -> installer exits non-zero).
+# numpy is intentionally NOT listed - pandas resolves a compatible version itself.
+streamlit>=1.50,<2
+pandas>=2.2,<3
+openpyxl>=3.1,<4
+lxml>=5.3
+beautifulsoup4>=4.12
+html5lib>=1.1
+python-dateutil>=2.8
+python-dotenv>=1.0
+xlrd>=2.0.1
 
 # ---- Only needed for the local RMS download step (NOT Streamlit Cloud) ----
 # selenium==4.15.2
