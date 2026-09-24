@@ -1,0 +1,14 @@
+# Salary Reconciliation Agent Requirements
+# Compatible with Python 3.9, 3.10, 3.11, 3.12
+# NOT compatible with Python 3.13 yet!
+
+selenium==4.15.2
+pandas==2.1.0
+openpyxl==3.1.2
+xlrd==2.0.1
+python-dateutil==2.8.2
+python-dotenv==1.0.0
+webdriver-manager==4.0.1
+schedule==1.2.0
+numpy==1.25.0
+

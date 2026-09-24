@@ -1,0 +1,33 @@
+# Secrets - never commit
+.env
+.ENV.save
+.streamlit/secrets.toml
+
+# Virtualenv
+venv/
+.venv/
+env/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# macOS
+.DS_Store
+__MACOSX/
+
+# Runtime folders
+downloads/
+epf_uploads/
+reports/
+logs/
+scheduler.log
+
+# Generated test data (keep the generator)
+sample_data/*.xls
+sample_data/*.xlsx
+sample_data/out/
+
+# Excel lock files
+~$*

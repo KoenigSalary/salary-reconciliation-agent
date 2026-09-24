@@ -1,0 +1,248 @@
+╔══════════════════════════════════════════════════════════════════════════════╗
+║                    SALARY RECONCILIATION AGENT ARCHITECTURE                  ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                              WORKFLOW OVERVIEW                               │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+    16th of Month                            17th of Month
+    ─────────────                            ─────────────
+         │                                          │
+         ▼                                          ▼
+   ┌──────────┐                              ┌──────────┐
+   │   Send   │                              │  Login   │
+   │   EPF    │                              │    to    │
+   │ Reminder │                              │   RMS    │
+   └────┬─────┘                              └────┬─────┘
+        │                                         │
+        │  Email to Tax Team                      ▼
+        │                              ┌─────────────────────┐
+        │                              │ Download 3 Files:   │
+        │                              │ 1. Salary Sheet     │
+        │                              │ 2. TDS Sheet        │
+        │                              │ 3. Bank SOA         │
+        │                              └──────────┬──────────┘
+        │                                         │
+        │                                         ▼
+        │                              ┌─────────────────────┐
+        │                              │ Read EPF File       │
+        │                              │ (Manually Uploaded) │
+        │                              └──────────┬──────────┘
+        │                                         │
+        │                                         ▼
+        │                              ┌─────────────────────┐
+        │                              │ Process All Files:  │
+        │                              │ - Parse Excel       │
+        │                              │ - Extract Data      │
+        │                              │ - Clean & Validate  │
+        │                              └──────────┬──────────┘
+        │                                         │
+        │                                         ▼
+        │                              ┌─────────────────────┐
+        │                              │ Reconcile:          │
+        │                              │ - Match by Emp ID   │
+        │                              │ - Match EPF by UAN  │
+        │                              │ - Flag Discrepancies│
+        │                              └──────────┬──────────┘
+        │                                         │
+        │                                         ▼
+        │                              ┌─────────────────────┐
+        │                              │ Generate Reports:   │
+        │                              │ - Summary           │
+        │                              │ - Full Data         │
+        │                              │ - Discrepancies     │
+        │                              │ - Branch/Dept/Des   │
+        │                              └──────────┬──────────┘
+        │                                         │
+        │                                         ▼
+        │                              ┌─────────────────────┐
+        │                              │ Send Email Report:  │
+        │                              │ - HTML Summary      │
+        │                              │ - Excel Attachment  │
+        │                              └─────────────────────┘
+        │
+        └──────────────────────────────────────────────────────────────────────►
+
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                            COMPONENT ARCHITECTURE                            │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+    ┌─────────────────────────────────────────────────────────────────────┐
+    │                          scheduler.py                               │
+    │              (Monitors dates and triggers jobs)                     │
+    └────────────────────────────┬────────────────────────────────────────┘
+                                 │
+                                 ▼
+    ┌─────────────────────────────────────────────────────────────────────┐
+    │                            main.py                                  │
+    │                 (Orchestrates entire workflow)                      │
+    └─┬───────────────┬────────────────┬────────────────┬─────────────┬──┘
+      │               │                │                │             │
+      ▼               ▼                ▼                ▼             ▼
+┌──────────┐  ┌─────────────┐  ┌──────────────┐  ┌──────────┐  ┌────────┐
+│ config.py│  │rms_automation│  │data_processor│  │reconcilia│  │email_  │
+│          │  │    .py      │  │    .py       │  │tion_engine│  │handler │
+│ Settings │  │             │  │              │  │   .py    │  │  .py   │
+│ Date     │  │ Selenium    │  │ Pandas       │  │          │  │        │
+│ Logic    │  │ WebDriver   │  │ Excel Parser │  │ Match    │  │ SMTP   │
+│ Branch   │  │ Login       │  │ Data Clean   │  │ Compare  │  │ Send   │
+│ Mapping  │  │ Download    │  │ Extraction   │  │ Reports  │  │ Emails │
+└──────────┘  └─────────────┘  └──────────────┘  └──────────┘  └────────┘
+
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                              DATA FLOW                                       │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+RMS Portal                 Downloaded Files              Processed Data
+──────────                 ────────────────              ──────────────
+                                                         
+┌──────────┐               ┌──────────────┐             ┌─────────────┐
+│ Auto TDS │──Download──>  │Salary Sheet  │──Parse───>  │EmpCode      │
+│  Panel   │               │  (Excel)     │             │GrossSalary  │
+└──────────┘               └──────────────┘             │EPF          │
+                                                        │TDS          │
+┌──────────┐               ┌──────────────┐             │NetPayable   │
+│ Update   │──Download──>  │  TDS Sheet   │──Parse───>  │UAN          │
+│   TDS    │               │  (Excel)     │             │Branch       │
+└──────────┘               └──────────────┘             │Designation  │
+                                                        │Department   │
+┌──────────┐               ┌──────────────┐             └──────┬──────┘
+│   Bank   │──Download──>  │  Bank SOA    │──Parse───>         │
+│   Book   │               │  (Excel)     │                    │
+└──────────┘               └──────────────┘                    │
+                                                               │
+Manual Upload              ┌──────────────┐                    │
+─────────────              │  EPF File    │──Parse───>         │
+                           │  (Excel)     │                    │
+┌──────────┐               └──────────────┘                    │
+│ Tax Team │──Upload────────────────────────────────────────>  │
+│  Uploads │                                                   │
+│ EPF File │                                                   │
+└──────────┘                                                   │
+                                                               ▼
+                                                    ┌──────────────────┐
+                                                    │ RECONCILIATION   │
+                                                    │                  │
+                                                    │ Match by EmpCode │
+                                                    │ Match EPF by UAN │
+                                                    │ Calculate Diffs  │
+                                                    │ Flag Mismatches  │
+                                                    └────────┬─────────┘
+                                                             │
+                                                             ▼
+                                                    ┌──────────────────┐
+                                                    │ EXCEL REPORT     │
+                                                    │ 6 Sheets:        │
+                                                    │ 1. Summary       │
+                                                    │ 2. Full Data     │
+                                                    │ 3. Discrepancies │
+                                                    │ 4. Branch Wise   │
+                                                    │ 5. Designation   │
+                                                    │ 6. Department    │
+                                                    └────────┬─────────┘
+                                                             │
+                                                             ▼
+                                                    ┌──────────────────┐
+                                                    │  EMAIL REPORT    │
+                                                    │  HTML + Excel    │
+                                                    └──────────────────┘
+
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                        RECONCILIATION LOGIC                                  │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+Step 1: Merge Salary + TDS (by Employee ID)
+   Salary[EmpCode] ←→ TDS[Employee Code]
+   
+Step 2: Merge with Bank SOA (by Employee ID)
+   Result[EmpCode] ←→ Bank[EmpCode extracted from "Name-ID"]
+   
+Step 3: Merge with EPF (by UAN)
+   Result[UAN] ←→ EPF[UAN]
+   
+Step 4: Compare Amounts
+   ✓ Salary TDS vs TDS Amount
+   ✓ Net Payable vs Bank Payment
+   ✓ Salary EPF vs EPF Amount
+   
+Step 5: Flag Discrepancies
+   If difference > ₹1.00 → Mark as Mismatch
+   Otherwise → Mark as Matched
+   
+Step 6: Generate Remarks
+   List all mismatches with actual differences
+
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                         DEPLOYMENT OPTIONS                                   │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+Option 1: Systemd Service (Recommended for Linux Servers)
+   sudo bash install_service.sh
+   → Runs continuously in background
+   → Auto-starts on boot
+   → Managed by systemd
+
+Option 2: Cron Job (Alternative for Linux)
+   # Add to crontab
+   0 9 16 * * /usr/bin/python3 /path/to/main.py --reminder
+   0 10 17 * * /usr/bin/python3 /path/to/main.py --reconcile
+
+Option 3: Windows Task Scheduler
+   Create two scheduled tasks:
+   - Task 1: Run on 16th at 9 AM
+   - Task 2: Run on 17th at 10 AM
+
+Option 4: Manual Execution
+   python scheduler.py
+   → Keep terminal open
+   → Use screen/tmux for persistence
+
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                         DIRECTORY STRUCTURE                                  │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+salary_reconciliation_agent/
+│
+├── config.py                  # Configuration & settings
+├── main.py                    # Main orchestration logic
+├── scheduler.py               # Date monitoring & job scheduling
+├── rms_automation.py          # RMS portal automation
+├── data_processor.py          # Excel file processing
+├── reconciliation_engine.py   # Reconciliation & reporting
+├── email_handler.py           # Email notifications
+├── test_agent.py              # Manual testing script
+│
+├── requirements.txt           # Python dependencies
+├── .env                       # Environment variables (CREATE THIS)
+├── .env.example               # Environment template
+├── install_service.sh         # Linux service installer
+├── README.md                  # Full documentation
+├── QUICKSTART.md             # Quick start guide
+├── ARCHITECTURE.txt          # This file
+│
+├── downloads/                # Downloaded files from RMS
+│   ├── salary_sheet.xlsx
+│   ├── tds_sheet.xlsx
+│   └── bank_soa.xlsx
+│
+├── epf_uploads/              # Manually uploaded EPF files
+│   └── EPF_November_2025.xlsx
+│
+├── reports/                  # Generated reconciliation reports
+│   └── Salary_Reconciliation_November_2025.xlsx
+│
+└── logs/                     # Application logs
+    └── reconciliation_20260117_100530.log
+
+
+╔══════════════════════════════════════════════════════════════════════════════╗
+║                         CREATED BY: AI ASSISTANT                             ║
+║                         VERSION: 1.0.0                                       ║
+║                         DATE: JANUARY 2026                                   ║
+╚══════════════════════════════════════════════════════════════════════════════╝
