@@ -118,12 +118,12 @@ def show_table(df, label):
     if df is None or len(df) == 0:
         st.warning(f"{label} sheet missing")
     else:
-        st.dataframe(clean_for_display(df), use_container_width=True)
+        st.dataframe(clean_for_display(df), width="stretch")
 
 
 LOGO_PATH = ROOT / "assets" / "koenig-logo.png"
 if LOGO_PATH.exists():
-    st.sidebar.image(str(LOGO_PATH), use_container_width=True)
+    st.sidebar.image(str(LOGO_PATH), width="stretch")
 
 st.sidebar.header("Controls")
 mode = st.sidebar.radio("Mode",
@@ -284,7 +284,7 @@ with tabs[3]:
         if f_emp and "EmpCode" in d.columns:
             d = d[d["EmpCode"].astype(str).str.contains(f_emp, na=False)]
         st.caption(f"{len(d)} row(s)")
-        st.dataframe(d, use_container_width=True, height=500)
+        st.dataframe(d, width="stretch", height=500)
         st.download_button("Download Discrepancies CSV",
                            data=d.to_csv(index=False).encode("utf-8"),
                            file_name="discrepancies.csv", mime="text/csv")
@@ -301,4 +301,4 @@ with tabs[4]:
     if name and "EmployeeName" in f.columns:
         f = f[f["EmployeeName"].astype(str).str.contains(name, case=False, na=False)]
     st.caption(f"{len(f)} row(s)")
-    st.dataframe(f, use_container_width=True, height=600)
+    st.dataframe(f, width="stretch", height=600)
