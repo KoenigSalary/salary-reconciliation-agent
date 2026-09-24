@@ -114,19 +114,73 @@ class EmailHandler:
         """
 
     def send_epf_reminder(self):
-        """Send reminder email on 16th to upload EPF manually"""
-        target_months = Config.get_target_months()
-        epf_month = target_months["salary_month_str"]
+        """
+        EPF upload reminder - sent automatically on the 14th, two days before the run.
 
-        subject = f"Reminder: Upload EPF File for {epf_month}"
+        The period is taken from the run that will fire on the 16th (get_run_months),
+        not from today's date, so the reminder always names exactly the same month as
+        the report that follows it.
+        """
+        epf_month = Config.get_run_months()["salary_month_str"]
 
-        body = f"""
-Dear Team,
+        subject = f"Reminder: upload the EPF file for {epf_month} by the 16th"
 
-This is an automated reminder to upload the EPF file for {epf_month}.
+        body = f"""Dear Team,
 
-Please upload the EPF file to:
+This is an automated reminder that the EPF file for {epf_month} is due by the 16th.
+
+The monthly reconciliation runs automatically on the evening of the 16th. The
+salary sheet, the TDS sheet and the bank statement are downloaded from the RMS
+portal on their own, so the EPF file is the only input that has to be placed by
+hand - and the run cannot be completed without it.
+
+Please upload the EPF file for {epf_month} to:
+
 {Config.EPF_UPLOAD_DIR}
+
+If the file is not there when the run fires, the report is held back and an alert
+is sent instead; the run then retries by itself as soon as the file appears.
+
+Thank you.
+Salary Reconciliation Agent
+"""
+        recipients = [Config.TAX_TEAM_EMAIL] if Config.TAX_TEAM_EMAIL else Config.RECIPIENT_EMAILS
+        return self.send_email(recipients=recipients, subject=subject, body=body, is_html=False)
+
+    def send_epf_missing_alert(self, salary_month=None, epf_dir=None):
+        """
+        Alert sent when the monthly run fired but no EPF file had been uploaded.
+
+        The report is deliberately withheld: a reconciliation without EPF marks every
+        employee as "EPF not reconciled", which reads as a data problem rather than a
+        missing input. An explicit alert is more useful than a misleading report.
+        """
+        salary_month = salary_month or Config.get_target_months()["salary_month_str"]
+        epf_dir = epf_dir or Config.EPF_UPLOAD_DIR
+
+        subject = f"ACTION NEEDED: EPF file missing - {salary_month} reconciliation on hold"
+
+        body = f"""Dear Team,
+
+The automated salary reconciliation ran but could NOT be completed, because no
+EPF file was found for {salary_month}.
+
+No report has been sent. A reconciliation without the EPF file would mark every
+employee as "EPF not reconciled", which would be misleading.
+
+What to do
+----------
+1. Place the EPF file for {salary_month} in:
+
+   {epf_dir}
+
+2. Nothing else is needed. The run retries by itself (every few hours) and emails
+   the full report as soon as the file is in place.
+
+The salary sheet, TDS sheet and bank statement were downloaded from RMS
+successfully and are waiting in:
+
+   {Config.DOWNLOAD_DIR}
 
 Thank you.
 Salary Reconciliation Agent

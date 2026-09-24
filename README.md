@@ -337,3 +337,30 @@ Internal use only - Koenig Solutions
 **Last Updated**: January 2026  
 **Maintained by**: IT Team  
 **Project Location**: ~/Downloads/Agent/Reconciliation
+
+---
+
+## Monthly automation
+
+The reconciliation runs by itself on the machine that can reach the RMS portal -
+the salary sheet, TDS sheet and bank statement are downloaded automatically, and
+the report is emailed:
+
+| When | What |
+|---|---|
+| **14th** | EPF upload reminder emailed to the tax team |
+| **16th** | Full run: RMS download + reconcile + report email |
+
+The EPF file is the only manual input (RMS has no export for it), which is why the
+reminder lands two days early. If it is missing on the 16th the report is held back
+and an alert is sent instead; the run retries by itself until the file appears.
+
+Install and operate it:
+
+```bash
+bash install_launchd.sh          # macOS: register the two launchd agents
+python3 scheduler.py --status    # what is due, what already ran
+```
+
+Full details - schedule, catch-up, the per-month ledger that stops double sends,
+and the Streamlit-versus-automation split - are in **[AUTOMATION.md](AUTOMATION.md)**.

@@ -111,6 +111,20 @@ class Config:
         }
 
     @staticmethod
+    def get_run_months(now: datetime | None = None):
+        """
+        The periods that the monthly run *scheduled for this month's 16th* targets.
+
+        Anything that talks about the upcoming run - above all the EPF reminder on
+        the 14th - must use this instead of get_target_months(). On the 14th,
+        get_target_months() would say "two months back" (day <= 15 rule) while the
+        16th run says "one month back", so the reminder would name the wrong period.
+        """
+        today = now or datetime.now()
+        run_moment = today.replace(day=16, hour=18, minute=0, second=0, microsecond=0)
+        return Config.get_target_months(run_moment)
+
+    @staticmethod
     def map_branch(location):
         if location is None or (isinstance(location, float) and location != location):
             return "Delhi"

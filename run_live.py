@@ -11,6 +11,15 @@ Usage
   python3 run_live.py --skip-download  # reconcile files already in downloads/
   python3 run_live.py --headed         # visible browser (debugging)
   python3 run_live.py --force-email    # send even if the EPF file is missing
+  python3 run_live.py --auto           # automated run: skip if this month already
+                                       # completed (used by launchd / scheduler.py)
+
+Exit codes
+----------
+  0  reconciliation done and the report was emailed (or --no-email was given)
+  2  one of the downloaded files is missing
+  3  held back - no EPF file in epf_uploads/ (no report sent)
+  4  reconciliation finished but the report email failed
 """
 
 import argparse
@@ -21,6 +30,7 @@ from pathlib import Path
 
 import pandas as pd
 
+import recon_state as ledger
 from config import Config
 from recon_core import detect_files, find_epf_file, run_reconciliation
 
@@ -164,12 +174,26 @@ def main(argv=None):
                    help="Send the report even when no EPF file was found")
     p.add_argument("--headed", action="store_true")
     p.add_argument("--month", help='Period label, e.g. "August 2026"')
+    p.add_argument("--auto", action="store_true",
+                   help="Automated run: skip when this month is already complete, and "
+                        "record completion in logs/run_ledger.json (launchd/scheduler)")
+    p.add_argument("--alert-on-missing-epf", action="store_true",
+                   help="Email the tax team when the run is held back for a missing "
+                        "EPF file (the scheduler passes this once per month)")
     args = p.parse_args(argv)
 
     setup_logging()
     log.info("=" * 78)
     log.info(f"LIVE RUN STARTED — {datetime.now():%d %B %Y at %I:%M %p}")
     log.info("=" * 78)
+
+    # ---- automated runs are once per month: stop early if this month is done ----
+    if args.auto and ledger.already_done(ledger.JOB_RECONCILIATION):
+        log.info(
+            f"--auto: {ledger.month_key()} is already reconciled and emailed "
+            f"(logs/run_ledger.json). Nothing to do - exiting without opening a browser."
+        )
+        return 0
 
     if not args.skip_download:
         download(headed=args.headed)
@@ -193,6 +217,16 @@ def main(argv=None):
                 "HOLDING EMAIL: without an EPF file the report cannot show a real EPF "
                 "reconciliation. Upload the EPF file, or pass --force-email to send anyway."
             )
+            if args.alert_on_missing_epf:
+                try:
+                    from email_handler import EmailHandler
+                    alerted = EmailHandler().send_epf_missing_alert(
+                        salary_month=Config.get_target_months()["salary_month_str"],
+                        epf_dir=Config.EPF_UPLOAD_DIR,
+                    )
+                    log.info(f"Missing-EPF alert email sent: {alerted}")
+                except Exception as e:
+                    log.error(f"Could not send the missing-EPF alert: {e}")
             return 3
         tmp_epf = Path(Config.EPF_UPLOAD_DIR) / "_no_epf_placeholder.xlsx"
         pd.DataFrame({"UAN": [], "EPF Amount": []}).to_excel(tmp_epf, index=False)
@@ -225,6 +259,10 @@ def main(argv=None):
         report_file=result["report_path"], summary_data=result["summary"]
     )
     log.info(f"Email sent: {ok}")
+
+    if ok and args.auto:
+        ledger.mark_done(ledger.JOB_RECONCILIATION, note="report emailed")
+
     return 0 if ok else 4
 
 

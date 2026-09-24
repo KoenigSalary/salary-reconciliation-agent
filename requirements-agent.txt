@@ -1,14 +1,25 @@
-# Salary Reconciliation Agent Requirements
-# Compatible with Python 3.9, 3.10, 3.11, 3.12
-# NOT compatible with Python 3.13 yet!
+# Salary Reconciliation Agent - requirements for the LOCAL automation host
+#
+# This is the machine that drives the RMS download and runs the monthly jobs:
+# a macOS Mac with launchd, or a Linux box with systemd.
+#
+# The Streamlit dashboard on Streamlit Cloud uses requirements.txt instead.
+#
+# Install with:  python3 -m pip install -r requirements-agent.txt
 
+# --- Browser automation for the RMS portal download ---
 selenium==4.15.2
-pandas==2.1.0
-openpyxl==3.1.2
-xlrd==2.0.1
-python-dateutil==2.8.2
-python-dotenv==1.0.0
 webdriver-manager==4.0.1
-schedule==1.2.0
-numpy==1.25.0
 
+# --- Reconciliation core (same set as requirements.txt) ---
+pandas>=2.2,<3
+openpyxl>=3.1,<4
+lxml>=5.3
+beautifulsoup4>=4.12
+html5lib>=1.1
+python-dateutil>=2.8
+python-dotenv>=1.0
+xlrd>=2.0.1
+
+# NOTE: `schedule` is no longer needed. scheduler.py uses only the standard
+# library for its timer, and launchd / systemd provide the real scheduling.

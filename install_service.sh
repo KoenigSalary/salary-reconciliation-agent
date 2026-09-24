@@ -1,7 +1,12 @@
 #!/bin/bash
 
-# Salary Reconciliation Agent - Production Deployment Script
-# Updated for project path: Downloads/Agent/Reconciliation
+# Salary Reconciliation Agent - Linux deployment (systemd)
+#
+# Installs scheduler.py as a systemd service that runs continuously. Schedule:
+#   14th 09:00  EPF upload reminder
+#   16th 18:00  full monthly run (RMS download -> reconcile -> email report)
+#
+# On macOS use install_launchd.sh instead.
 
 echo "=================================="
 echo "Salary Reconciliation Agent Setup"
@@ -42,14 +47,14 @@ echo ""
 
 echo "Step 2: Installing Python dependencies..."
 cd "$AGENT_DIR"
-pip3 install -r requirements.txt
-echo "✓ Dependencies installed"
+pip3 install -r requirements-agent.txt
+echo "✓ Dependencies installed (browser + reconciliation core)"
 echo ""
 
 echo "Step 3: Creating systemd service..."
 cat > $SERVICE_FILE << EOF
 [Unit]
-Description=Salary Reconciliation Agent
+Description=Salary Reconciliation Agent (EPF reminder on the 14th, monthly run on the 16th)
 After=network.target
 
 [Service]
@@ -97,7 +102,13 @@ echo ""
 echo "4. Check service status:"
 echo "   sudo systemctl status $SERVICE_NAME"
 echo ""
-echo "5. View logs:"
+echo "5. Check what is due and what has already run:"
+echo "   python3 $AGENT_DIR/scheduler.py --status"
+echo ""
+echo "6. Run a job immediately (do not wait for the calendar):"
+echo "   python3 $AGENT_DIR/scheduler.py --run-now recon"
+echo ""
+echo "7. View logs:"
 echo "   sudo journalctl -u $SERVICE_NAME -f"
 echo "   OR"
 echo "   tail -f $AGENT_DIR/logs/service.log"
