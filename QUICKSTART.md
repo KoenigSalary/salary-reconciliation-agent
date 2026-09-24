@@ -49,7 +49,7 @@ RMS_PASSWORD=your_rms_password
 ### Step 4: Test the Agent
 ```bash
 cd ~/Downloads/Agent/Reconciliation
-python test_agent.py
+python3 test_agent.py
 ```
 
 This will:
@@ -69,7 +69,7 @@ sudo systemctl enable salary-reconciliation-agent
 **OR** Run manually (keep terminal open):
 ```bash
 cd ~/Downloads/Agent/Reconciliation
-python scheduler.py
+python3 scheduler.py
 ```
 
 ## 📅 What Happens Automatically
@@ -192,7 +192,7 @@ tail -f logs/*.log
 
 # Test manually (stop service first)
 sudo systemctl stop salary-reconciliation-agent
-python test_agent.py
+python3 test_agent.py
 ```
 
 ## ✅ Checklist Before Going Live

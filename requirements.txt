@@ -1,5 +1,20 @@
+# ---- Dashboard / reconciliation core (Streamlit Cloud) ----
 streamlit==1.41.1
 pandas==2.2.3
+numpy==1.26.4
 openpyxl==3.1.5
+lxml==5.2.2
 beautifulsoup4==4.12.3
 html5lib==1.1
+python-dateutil==2.8.2
+python-dotenv==1.0.0
+
+# Insurance: pandas needs xlrd for a genuine BIFF .xls workbook. The current RMS
+# exports do not need it (salary = HTML, bank = TSV, TDS/EPF = .xlsx), but this
+# is what makes a real .xls readable if RMS ever ships one.
+xlrd==2.0.1
+
+# ---- Only needed for the local RMS download step (NOT Streamlit Cloud) ----
+# selenium==4.15.2
+# webdriver-manager==4.0.1
+# schedule==1.2.0

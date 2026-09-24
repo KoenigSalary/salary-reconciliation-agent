@@ -1,49 +1,85 @@
-import streamlit as st
-import pandas as pd
+"""
+Salary Reconciliation Dashboard - Streamlit app (Streamlit Community Cloud ready)
+
+Two ways to use it:
+  A) Upload the 4 raw RMS files -> reconciles in-process and shows the dashboard.
+  B) Upload an already-generated Salary_Reconciliation_*.xlsx -> dashboard only.
+
+The RMS download step (Selenium + Chrome) is NOT part of this app - it cannot run on
+Streamlit Cloud. Run `python3 run_live.py` locally to fetch the files first.
+"""
+
+import os
+import sys
+import tempfile
 from io import BytesIO
 from pathlib import Path
-import subprocess
-import sys
-import os
-import time
+
+import pandas as pd
+import streamlit as st
+
+ROOT = Path(__file__).resolve().parent.parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 st.set_page_config(page_title="Salary Reconciliation Dashboard", layout="wide")
 
-IS_CLOUD = os.getenv("STREAMLIT_SERVER_PORT") is not None  # simple heuristic
 
-# Sidebar logo (top-left)
-LOGO_PATH = Path(__file__).resolve().parent.parent / "assets" / "koenig-logo.png"
-if LOGO_PATH.exists():
-    st.sidebar.image(str(LOGO_PATH), use_container_width=True)
-else:
-    st.sidebar.warning("Logo not found: assets/koenig-logo.png")
+def _bridge_secrets():
+    """Expose Streamlit secrets as env vars so config.py can read them."""
+    keys = [
+        "SENDER_EMAIL", "SENDER_PASSWORD", "SMTP_SERVER", "SMTP_PORT",
+        "RECIPIENT_EMAILS", "TAX_TEAM_EMAIL",
+        "RMS_USERNAME", "RMS_PASSWORD", "RMS_URL", "RECON_BASE_DIR",
+    ]
+    try:
+        for k in keys:
+            if k in st.secrets and not os.getenv(k):
+                os.environ[k] = str(st.secrets[k])
+    except Exception:
+        pass
 
-BASE_DIR = Path.home() / "Downloads" / "Agent" / "Reconciliation"
-REPORTS_DIR = BASE_DIR / "reports"
-LOGS_DIR = BASE_DIR / "logs"
-EPF_DIR = BASE_DIR / "epf_uploads"
 
-st.title("Salary Reconciliation Dashboard")
-st.caption("Management Dashboard • Upload Salary_Reconciliation_*.xlsx to view KPIs and drilldowns")
+_bridge_secrets()
 
-if IS_CLOUD:
-    st.info("Upload the latest Salary_Reconciliation_*.xlsx report to view KPIs and drilldowns.")
-else:
-    st.info("Auto-load enabled: dashboard will load the latest report from reports/ if available.")
+from config import Config                      # noqa: E402
+from recon_core import run_reconciliation      # noqa: E402
 
-def find_latest_report():
-    if not REPORTS_DIR.exists():
-        return None
-    files = sorted(REPORTS_DIR.glob("Salary_Reconciliation_*.xlsx"), key=lambda p: p.stat().st_mtime)
-    return files[-1] if files else None
+SHEET_ORDER = ["Branch Wise", "Department Wise", "Designation Wise",
+               "Discrepancies", "Full Reconciliation"]
 
-def load_sheets_from_bytes(file_bytes: bytes):
-    xls = pd.ExcelFile(BytesIO(file_bytes))
-    return {name: pd.read_excel(BytesIO(file_bytes), sheet_name=name) for name in xls.sheet_names}
 
-def load_sheets_from_path(path: Path):
+def _read_report_sheet(src, sheet_name: str) -> pd.DataFrame:
+    """
+    Read one sheet from a generated report.
+
+    The generator writes a merged title row above the headers (row 1 = title,
+    row 2 = headers), so a naive header=0 read yields 'Unnamed: N' columns.
+    Detect the real header row instead.
+    """
+    raw = pd.read_excel(src, sheet_name=sheet_name, header=None)
+    if raw.empty:
+        return raw
+    header_idx = 0
+    for i in range(min(5, len(raw))):
+        if raw.iloc[i].notna().sum() >= 3:
+            header_idx = i
+            break
+    df = raw.iloc[header_idx + 1:].copy()
+    df.columns = [str(v).strip() for v in raw.iloc[header_idx].tolist()]
+    df = df.loc[:, ~df.columns.astype(str).str.startswith("Unnamed")]
+    return df.dropna(how="all").reset_index(drop=True)
+
+
+def load_report_from_bytes(data: bytes) -> dict:
+    xls = pd.ExcelFile(BytesIO(data))
+    return {n: _read_report_sheet(BytesIO(data), n) for n in xls.sheet_names}
+
+
+def load_report_from_path(path: Path) -> dict:
     xls = pd.ExcelFile(path)
-    return {name: pd.read_excel(path, sheet_name=name) for name in xls.sheet_names}
+    return {n: _read_report_sheet(path, n) for n in xls.sheet_names}
+
 
 def safe_int(x, default=0):
     try:
@@ -51,137 +87,141 @@ def safe_int(x, default=0):
     except Exception:
         return default
 
+
 def fmt_inr(x):
     try:
-        return f"₹ {float(x):,.2f}"
+        return f"Rs {float(x):,.2f}"
     except Exception:
-        return "₹ 0.00"
+        return "Rs 0.00"
 
-def show_kpis(summary_row, full_df):
-    c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric("Total Employees", safe_int(summary_row.get("Total Employees", len(full_df))))
-    c2.metric("Fully Matched", safe_int(summary_row.get("Fully Matched", 0)))
-    c3.metric("TDS Mismatches", safe_int(summary_row.get("TDS Mismatches", 0)))
-    c4.metric("Bank Mismatches", safe_int(summary_row.get("Bank Mismatches", 0)))
-    c5.metric("EPF Mismatches", safe_int(summary_row.get("EPF Mismatches", 0)))
 
-def show_financials(summary_row):
-    st.subheader("💰 Financial Summary")
-    fc1, fc2, fc3, fc4, fc5 = st.columns(5)
-    fc1.metric("Total Gross Salary", fmt_inr(summary_row.get("Total Gross Salary", 0)))
-    fc2.metric("Total Net Payable", fmt_inr(summary_row.get("Total Net Payable", 0)))
-    fc3.metric("Total Bank Payment", fmt_inr(summary_row.get("Total Bank Payment", 0)))
-    fc4.metric("Total TDS", fmt_inr(summary_row.get("Total TDS", 0)))
-    fc5.metric("Total EPF", fmt_inr(summary_row.get("Total EPF", 0)))
+def clean_for_display(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.loc[:, ~df.columns.astype(str).str.startswith("Unnamed")].copy()
+    for c in df.columns:
+        if df[c].dtype == "object":
+            coerced = pd.to_numeric(df[c], errors="coerce")
+            if coerced.notna().sum() >= max(1, int(0.8 * df[c].notna().sum())):
+                df[c] = coerced
+    return df
 
-def download_df_csv(df, name):
-    return df.to_csv(index=False).encode("utf-8")
 
-# -----------------------
-# Sidebar: Load / Run
-# -----------------------
+def find_latest_report():
+    reports_dir = Path(Config.REPORTS_DIR)
+    if not reports_dir.exists():
+        return None
+    files = sorted(reports_dir.glob("Salary_Reconciliation_*.xlsx"),
+                   key=lambda p: p.stat().st_mtime)
+    return files[-1] if files else None
+
+
+def show_table(df, label):
+    if df is None or len(df) == 0:
+        st.warning(f"{label} sheet missing")
+    else:
+        st.dataframe(clean_for_display(df), use_container_width=True)
+
+
+LOGO_PATH = ROOT / "assets" / "koenig-logo.png"
+if LOGO_PATH.exists():
+    st.sidebar.image(str(LOGO_PATH), use_container_width=True)
+
 st.sidebar.header("Controls")
+mode = st.sidebar.radio("Mode",
+                        ["Run reconciliation from files", "View an existing report"],
+                        index=0)
 
-# A) Upload FINAL report (xlsx) - optional
-uploaded_report = st.sidebar.file_uploader(
-    "Upload Final Reconciliation Report (.xlsx)",
-    type=["xlsx"],
-    key="upload_final_report"
-)
+sheets = run_summary = report_bytes = report_name = None
+latest_report = find_latest_report()
+
+if mode == "Run reconciliation from files":
+    st.sidebar.caption("Upload the 4 files. Reconciliation runs in-process - "
+                       "no Chrome, no RMS login needed.")
+    salary_file = st.sidebar.file_uploader("1) Salary Sheet (Salay_Sheet_*.xls)",
+                                           type=["xls", "xlsx"], key="u_salary")
+    tds_file = st.sidebar.file_uploader("2) TDS Sheet (Update TDS*.xlsx)",
+                                        type=["xls", "xlsx"], key="u_tds")
+    bank_file = st.sidebar.file_uploader("3) Bank Book (BankBookEntry*.xls)",
+                                         type=["xls", "xlsx"], key="u_bank")
+    epf_file = st.sidebar.file_uploader("4) EPF Upload (epf_*.xlsx)",
+                                        type=["xls", "xlsx"], key="u_epf")
+
+    default_label = Config.get_target_months()["salary_month"].strftime("%B %Y")
+    month_label = st.sidebar.text_input("Period label", value=default_label)
+
+    if st.sidebar.button("Run Reconciliation", type="primary"):
+        uploaded = {"Salary": salary_file, "TDS": tds_file,
+                    "Bank": bank_file, "EPF": epf_file}
+        missing = [k for k, v in uploaded.items() if v is None]
+        if missing:
+            st.sidebar.error(f"Missing upload(s): {', '.join(missing)}")
+        else:
+            tmp = Path(tempfile.mkdtemp(prefix="recon_"))
+            paths = {}
+            for key, up in uploaded.items():
+                fp = tmp / up.name
+                fp.write_bytes(up.getvalue())
+                paths[key] = fp
+            with st.spinner("Running reconciliation..."):
+                try:
+                    result = run_reconciliation(paths["Salary"], paths["TDS"],
+                                                paths["Bank"], paths["EPF"],
+                                                out_dir=tmp, month_label=month_label)
+                    report_bytes = Path(result["report_path"]).read_bytes()
+                    report_name = Path(result["report_path"]).name
+                    sheets = load_report_from_bytes(report_bytes)
+                    run_summary = {"counts": result["counts"], "summary": result["summary"]}
+                    st.session_state.update(report_bytes=report_bytes, report_name=report_name,
+                                            sheets=sheets, run_summary=run_summary)
+                    st.sidebar.success(f"Report ready: {report_name}")
+                except Exception as e:
+                    st.sidebar.error(f"Reconciliation failed: {e}")
+
+    if sheets is None and "sheets" in st.session_state:
+        sheets = st.session_state["sheets"]
+        report_bytes = st.session_state.get("report_bytes")
+        report_name = st.session_state.get("report_name")
+        run_summary = st.session_state.get("run_summary")
+
+    if sheets is None and latest_report is not None:
+        if st.sidebar.checkbox("Auto-load latest report from reports/", value=True):
+            sheets = load_report_from_path(latest_report)
+            report_bytes = latest_report.read_bytes()
+            report_name = latest_report.name
+            st.sidebar.success(f"Auto-loaded: {latest_report.name}")
+else:
+    uploaded_report = st.sidebar.file_uploader("Upload Salary_Reconciliation_*.xlsx",
+                                               type=["xlsx"], key="u_report")
+    if uploaded_report is not None:
+        sheets = load_report_from_bytes(uploaded_report.getvalue())
+        report_bytes = uploaded_report.getvalue()
+        report_name = uploaded_report.name
+        st.sidebar.success("Report loaded")
 
 st.sidebar.markdown("---")
-st.sidebar.subheader("Manual Inputs (4 files)")
+st.sidebar.subheader("Automation status")
+st.sidebar.write("Selenium RMS download: **local only** (needs Chrome)")
 
-salary_file = st.sidebar.file_uploader(
-    "1) Salary Sheet (Salay_Sheet_*.xls)",
-    type=["xls", "xlsx"],
-    key="upload_salary"
-)
+st.title("Salary Reconciliation Dashboard")
+st.caption("Upload the raw files to reconcile, or open an existing "
+           "Salary_Reconciliation_*.xlsx report.")
 
-tds_file = st.sidebar.file_uploader(
-    "2) TDS Sheet (Update TDS*.xlsx)",
-    type=["xls", "xlsx"],
-    key="upload_tds"
-)
+if run_summary:
+    with st.expander("Run details", expanded=False):
+        c = run_summary["counts"]
+        st.write(f"Salary: **{c['salary_rows']}** | TDS: **{c['tds_rows']}** | "
+                 f"Bank: **{c['bank_rows']}** | EPF: **{c['epf_rows']}** | "
+                 f"Reconciled: **{c['reconciled_rows']}**")
 
-bank_file = st.sidebar.file_uploader(
-    "3) Bank Book (BankBookEntry*.xls)",
-    type=["xls", "xlsx"],
-    key="upload_bank"
-)
+if report_bytes is not None and report_name:
+    st.download_button("Download generated Excel report", data=report_bytes,
+                       file_name=report_name,
+                       mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
-epf_file = st.sidebar.file_uploader(
-    "4) EPF Upload (epf_*.xlsx)",
-    type=["xls", "xlsx"],
-    key="upload_epf"
-)
+if sheets is None:
+    st.info("Upload the 4 raw files in the sidebar and press **Run Reconciliation**, "
+            "or switch to **View an existing report**.")
+    st.stop()
 
-latest_report = find_latest_report()
-auto_load = st.sidebar.checkbox("Auto-load latest report from reports/", value=True)
-
-report_path = None
-sheets = None
-
-if uploaded_report is not None:
-    sheets = load_sheets_from_bytes(uploaded_report.getvalue())
-    st.sidebar.success("Loaded uploaded final report")
-else:
-    if auto_load and latest_report:
-        report_path = latest_report
-        sheets = load_sheets_from_path(report_path)
-        st.sidebar.success(f"Auto-loaded: {report_path.name}")
-    else:
-        st.info("Upload a report OR enable auto-load and ensure reports/ has a Salary_Reconciliation_*.xlsx file.")
-        st.stop()
-
-# Manual Run section
-st.sidebar.subheader("Manual Run (if automation didn’t run)")
-st.sidebar.caption("Runs your existing reconciliation script and generates a new Excel in reports/.")
-
-if st.sidebar.button("Run Reconciliation Now"):
-    with st.spinner("Running reconciliation... this may take a few minutes"):
-        # Run main.py from base dir
-        # IMPORTANT: This assumes your venv + .env are already configured
-        cmd = [sys.executable, str(BASE_DIR / "test_agent.py")]
-        # If your test_agent asks yes/no, it will block. Better: call main agent directly if available.
-        # If you already have a non-interactive entry point, replace cmd accordingly.
-        proc = subprocess.Popen(cmd, cwd=str(BASE_DIR), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-        output_lines = []
-        start = time.time()
-        while True:
-            line = proc.stdout.readline()
-            if not line and proc.poll() is not None:
-                break
-            if line:
-                output_lines.append(line.rstrip())
-                if len(output_lines) > 200:
-                    output_lines = output_lines[-200:]
-            if time.time() - start > 600:  # 10 minutes safety
-                proc.kill()
-                output_lines.append("Stopped: runtime exceeded 10 minutes.")
-                break
-
-        st.subheader("Run Output (tail)")
-        st.code("\n".join(output_lines[-200:]), language="text")
-
-        # reload latest report after run
-        new_latest = find_latest_report()
-        if new_latest:
-            st.success(f"Latest report: {new_latest.name}")
-            sheets = load_sheets_from_path(new_latest)
-
-# Automation status info
-st.sidebar.subheader("Automation Status")
-st.sidebar.write(f"Latest report: **{latest_report.name if latest_report else 'None'}**")
-if EPF_DIR.exists():
-    epf_files = sorted(EPF_DIR.glob("*.xlsx"), key=lambda p: p.stat().st_mtime)
-    st.sidebar.write(f"Latest EPF: **{epf_files[-1].name if epf_files else 'None'}**")
-else:
-    st.sidebar.write("EPF folder missing")
-
-# -----------------------
-# Main content
-# -----------------------
 summary_df = sheets.get("Summary")
 full_df = sheets.get("Full Reconciliation")
 disc_df = sheets.get("Discrepancies")
@@ -189,116 +229,76 @@ branch_df = sheets.get("Branch Wise")
 dept_df = sheets.get("Department Wise")
 desig_df = sheets.get("Designation Wise")
 
-if summary_df is None or summary_df.empty:
-    summary_row = {}
-else:
-    summary_row = summary_df.iloc[0].to_dict()
+summary_row = {} if summary_df is None or summary_df.empty else summary_df.iloc[0].to_dict()
 
-st.subheader("📌 KPI Summary")
 if full_df is None:
-    st.error("Full Reconciliation sheet not found in the report.")
+    st.error("Full Reconciliation sheet not found in this file.")
     st.stop()
 
-show_kpis(summary_row, full_df)
-show_financials(summary_row)
+st.subheader("KPI Summary")
+c1, c2, c3, c4, c5 = st.columns(5)
+c1.metric("Total Employees", safe_int(summary_row.get("Total Employees", len(full_df))))
+c2.metric("Fully Matched", safe_int(summary_row.get("Fully Matched", 0)))
+c3.metric("TDS Mismatches", safe_int(summary_row.get("TDS Mismatches", 0)))
+c4.metric("Bank Mismatches", safe_int(summary_row.get("Bank Mismatches", 0)))
+c5.metric("EPF Mismatches", safe_int(summary_row.get("EPF Mismatches", 0)))
+
+st.subheader("Financial Summary")
+f1, f2, f3, f4, f5 = st.columns(5)
+f1.metric("Total Gross Salary", fmt_inr(summary_row.get("Total Gross Salary", 0)))
+f2.metric("Total Net Payable", fmt_inr(summary_row.get("Total Net Payable", 0)))
+f3.metric("Total Bank Payment", fmt_inr(summary_row.get("Total Bank Payment", 0)))
+f4.metric("Total TDS", fmt_inr(summary_row.get("Total TDS", 0)))
+f5.metric("Total EPF", fmt_inr(summary_row.get("Total EPF", 0)))
 
 st.divider()
-
-def sanitize_df_for_streamlit(df):
-    # Drop empty "Unnamed" columns created by merged/title rows
-    df = df.loc[:, ~df.columns.astype(str).str.startswith("Unnamed")]
-    # Convert mixed object columns to string to avoid Arrow issues
-    for c in df.columns:
-        if df[c].dtype == "object":
-            df[c] = df[c].astype(str)
-    return df
-
-    st.dataframe(sanitize_df_for_streamlit(df))
-
-tabs = st.tabs([
-    "Branch Wise", "Department Wise", "Designation Wise",
-    "Discrepancies", "Full Reconciliation", "Downloads"
-])
+tabs = st.tabs(SHEET_ORDER)
 
 with tabs[0]:
-    st.subheader("Branch Wise")
-    if branch_df is not None:
-        st.dataframe(branch_df, use_container_width=True)
-    else:
-        st.warning("Branch Wise sheet missing")
-
+    st.subheader("Branch Wise"); show_table(branch_df, "Branch Wise")
 with tabs[1]:
-    st.subheader("Department Wise")
-    if dept_df is not None:
-        st.dataframe(dept_df, use_container_width=True)
-    else:
-        st.warning("Department Wise sheet missing")
-
+    st.subheader("Department Wise"); show_table(dept_df, "Department Wise")
 with tabs[2]:
-    st.subheader("Designation Wise")
-    if desig_df is not None:
-        st.dataframe(desig_df, use_container_width=True)
-    else:
-        st.warning("Designation Wise sheet missing")
-
+    st.subheader("Designation Wise"); show_table(desig_df, "Designation Wise")
 with tabs[3]:
     st.subheader("Discrepancies (filters + export)")
     if disc_df is None:
         st.warning("Discrepancies sheet missing")
     else:
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            f_branch = st.selectbox("Branch", ["All"] + sorted(disc_df["Branch"].dropna().unique().tolist()) if "Branch" in disc_df.columns else ["All"])
-        with col2:
-            f_dept = st.selectbox("Department", ["All"] + sorted(disc_df["Department"].dropna().unique().tolist()) if "Department" in disc_df.columns else ["All"])
-        with col3:
+        d = clean_for_display(disc_df)
+        k1, k2, k3 = st.columns(3)
+        with k1:
+            branches = ["All"] + sorted(d["Branch"].dropna().astype(str).unique().tolist()) \
+                if "Branch" in d.columns else ["All"]
+            f_branch = st.selectbox("Branch", branches)
+        with k2:
+            depts = ["All"] + sorted(d["Department"].dropna().astype(str).unique().tolist()) \
+                if "Department" in d.columns else ["All"]
+            f_dept = st.selectbox("Department", depts)
+        with k3:
             f_emp = st.text_input("EmpCode contains")
-
-        df = disc_df.copy()
-        if f_branch != "All" and "Branch" in df.columns:
-            df = df[df["Branch"] == f_branch]
-        if f_dept != "All" and "Department" in df.columns:
-            df = df[df["Department"] == f_dept]
-        if f_emp and "EmpCode" in df.columns:
-            df = df[df["EmpCode"].astype(str).str.contains(f_emp, na=False)]
-
-        st.dataframe(df, use_container_width=True, height=500)
-
-        st.download_button(
-            "Download Discrepancies CSV",
-            data=download_df_csv(df, "discrepancies.csv"),
-            file_name="discrepancies.csv",
-            mime="text/csv"
-        )
-
+        if f_branch != "All" and "Branch" in d.columns:
+            d = d[d["Branch"].astype(str) == f_branch]
+        if f_dept != "All" and "Department" in d.columns:
+            d = d[d["Department"].astype(str) == f_dept]
+        if f_emp and "EmpCode" in d.columns:
+            d = d[d["EmpCode"].astype(str).str.contains(f_emp, na=False)]
+        st.caption(f"{len(d)} row(s)")
+        st.dataframe(d, use_container_width=True, height=500)
+        st.download_button("Download Discrepancies CSV",
+                           data=d.to_csv(index=False).encode("utf-8"),
+                           file_name="discrepancies.csv", mime="text/csv")
 with tabs[4]:
     st.subheader("Full Reconciliation (search)")
-    col1, col2 = st.columns(2)
-    with col1:
-        emp = st.text_input("Filter EmpCode contains")
-    with col2:
-        name = st.text_input("Filter EmployeeName contains")
-
-    df = full_df.copy()
-    if emp and "EmpCode" in df.columns:
-        df = df[df["EmpCode"].astype(str).str.contains(emp, na=False)]
-    if name and "EmployeeName" in df.columns:
-        df = df[df["EmployeeName"].astype(str).str.contains(name, case=False, na=False)]
-
-    st.dataframe(df, use_container_width=True, height=600)
-
-with tabs[5]:
-    st.subheader("Downloads")
-    if report_path:
-        st.write(f"Current report: **{report_path.name}**")
-
-    # allow downloading the currently loaded report if it was auto-loaded
-    if report_path and report_path.exists():
-        st.download_button(
-            "Download Current Excel Report",
-            data=report_path.read_bytes(),
-            file_name=report_path.name,
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        )
-    else:
-        st.info("If you uploaded a file, use your browser download for that file or auto-load from reports/.")
+    f = clean_for_display(full_df)
+    q1, q2 = st.columns(2)
+    with q1:
+        emp = st.text_input("Filter EmpCode contains", key="fr_emp")
+    with q2:
+        name = st.text_input("Filter EmployeeName contains", key="fr_name")
+    if emp and "EmpCode" in f.columns:
+        f = f[f["EmpCode"].astype(str).str.contains(emp, na=False)]
+    if name and "EmployeeName" in f.columns:
+        f = f[f["EmployeeName"].astype(str).str.contains(name, case=False, na=False)]
+    st.caption(f"{len(f)} row(s)")
+    st.dataframe(f, use_container_width=True, height=600)

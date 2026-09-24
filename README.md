@@ -146,7 +146,7 @@ The scheduler automatically runs:
 
 ```bash
 cd ~/Downloads/Agent/Reconciliation
-python scheduler.py
+python3 scheduler.py
 ```
 
 Keep this running continuously (use `nohup` or `systemd` service for production).
@@ -175,14 +175,14 @@ sudo journalctl -u salary-reconciliation-agent -f
 Run reconciliation manually:
 ```bash
 cd ~/Downloads/Agent/Reconciliation
-python main.py
+python3 main.py
 ```
 
 ### Option 4: Test Individual Components
 
 ```bash
 cd ~/Downloads/Agent/Reconciliation
-python test_agent.py
+python3 test_agent.py
 ```
 
 This will:

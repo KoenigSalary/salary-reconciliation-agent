@@ -152,7 +152,7 @@ pip install -r requirements.txt
 
 # Run agent (always activate venv first)
 source venv/bin/activate
-python test_agent.py
+python3 test_agent.py
 ```
 
 ## After Successful Installation

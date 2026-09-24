@@ -166,53 +166,108 @@ class DataProcessor:
     def process_bank_soa(file_path):
         """
         Process Bank SOA - aggregates multiple payments per employee.
+
+        The RMS Bank Book export is TAB-SEPARATED TEXT named .xls (magic bytes
+        "Transact"). pandas.read_html and read_excel both reject it, so the reader
+        falls through to a TSV parse. Column names have changed over time, so they
+        are detected by name rather than hard-coded.
         """
         logger.info(f"Processing Bank SOA: {file_path}")
-        df = DataProcessor.read_excel_file(file_path)
+
+        df = None
+        try:
+            tables = pd.read_html(file_path)
+            if tables:
+                def score(t):
+                    cols = [str(c).strip().lower() for c in t.columns]
+                    has_emp = any(("employee" in c or "party" in c or "name" in c) for c in cols)
+                    has_amt = any(("amount" in c or "credit" in c or "net" in c or "paid" in c) for c in cols)
+                    return (has_emp and has_amt, len(t) * max(len(t.columns), 1))
+                df = max(tables, key=score)
+                logger.info(f"Bank SOA: chose HTML table of shape {df.shape}")
+        except Exception as e:
+            logger.debug(f"read_html failed for bank file: {e}")
+
+        if df is None:
+            df = DataProcessor.read_excel_file(file_path)
 
         df.columns = [str(c).strip() for c in df.columns]
+        logger.info(f"Bank SOA columns: {df.columns.tolist()}")
 
-        if "Employee" in df.columns:
-            df["EmpCode"] = df["Employee"].apply(DataProcessor.extract_employee_id_from_name)
-        else:
-            df["EmpCode"] = None
+        lower = {str(c).strip().lower(): c for c in df.columns}
 
-        # Handle comma-formatted amounts
-        if "Amount" in df.columns:
-            df["Amount_Clean"] = df["Amount"].astype(str).str.replace(",", "").str.strip()
-            amount_numeric = pd.to_numeric(df["Amount_Clean"], errors="coerce")
+        def find(*keys, exclude=()):
+            for c_l, c in lower.items():
+                if any(k in c_l for k in keys) and not any(x in c_l for x in exclude):
+                    return c
+            return None
+
+        emp_col = find("employee", "party", "beneficiary", "name")
+        amt_col = find("amount", "credit", "net", "paid", exclude=("tds", "deduct", "gross"))
+        date_col = find("date")
+        txn_col = find("transaction", "utr", "chq", "cheque", "ref")
+
+        if not emp_col or not amt_col:
+            logger.error(f"Bank SOA: cannot identify columns. employee={emp_col!r} "
+                         f"amount={amt_col!r} available={df.columns.tolist()}")
+            return pd.DataFrame(columns=["EmpCode", "BankPayment", "EmployeeName",
+                                         "PaymentDate", "TransactionID"])
+
+        logger.info(f"Bank SOA mapping -> employee={emp_col!r} amount={amt_col!r} "
+                    f"date={date_col!r} txn={txn_col!r}")
+
+        emp_series = df[emp_col]
+
+        # Prefer the dedicated EmployeeCode column; `Employee` holds only a display
+        # name such as "Sakshi Dhawan" and yields no id.
+        code_col = lower.get("employeecode") or lower.get("empcode") or lower.get("employee code")
+        if code_col:
+            logger.info(f"Bank SOA: using dedicated code column {code_col!r}")
+            df["EmpCode"] = (df[code_col].astype(str).str.strip()
+                             .str.replace(r"\.0$", "", regex=True))
+            df.loc[df["EmpCode"].isin(["", "nan", "None", "<NA>"]), "EmpCode"] = None
         else:
-            amount_numeric = 0
+            df["EmpCode"] = emp_series.apply(DataProcessor.extract_employee_id_from_name)
+
+        amount_numeric = pd.to_numeric(
+            df[amt_col].astype(str).str.replace(",", "").str.replace("Rs", "")
+            .str.replace("INR", "").str.strip(),
+            errors="coerce",
+        )
 
         bank_data = pd.DataFrame({
             "EmpCode": df["EmpCode"].astype(str).str.strip(),
-            "EmployeeName": df.get("Employee"),
+            "EmployeeName": emp_series,
             "BankPayment": amount_numeric,
-            "PaymentDate": df.get("Date"),
-            "TransactionID": df.get("TransactionID"),
+            "PaymentDate": df[date_col] if date_col else None,
+            "TransactionID": df[txn_col] if txn_col else None,
         })
 
-        bank_data = bank_data[bank_data["EmpCode"].notna()]
-        bank_data = bank_data[bank_data["EmpCode"] != ""]
-        bank_data = bank_data[bank_data["EmpCode"] != "nan"]
-        bank_data = bank_data[bank_data["EmpCode"] != "None"]
-        bank_data = bank_data[bank_data["BankPayment"].notna()]
-        bank_data = bank_data[bank_data["BankPayment"] > 0]
+        before = len(bank_data)
+        bank_data = bank_data[
+            bank_data["EmpCode"].notna()
+            & (bank_data["EmpCode"] != "") & (bank_data["EmpCode"] != "nan")
+            & (bank_data["EmpCode"] != "None")
+            & (bank_data["BankPayment"].notna()) & (bank_data["BankPayment"] > 0)
+        ]
+        logger.info(f"Bank SOA: {before} raw rows -> {len(bank_data)} valid transactions")
 
-        logger.info(f"Filtered {len(bank_data)} valid transactions")
+        if bank_data.empty:
+            logger.error("Bank SOA: no usable rows. Employee column sample: "
+                         f"{emp_series.head(5).tolist()}")
+            return pd.DataFrame(columns=["EmpCode", "BankPayment", "EmployeeName",
+                                         "PaymentDate", "TransactionID"])
 
-        # Aggregate before returning
         bank_agg = bank_data.groupby("EmpCode", as_index=False).agg(
             BankPayment=("BankPayment", "sum"),
             EmployeeName=("EmployeeName", "first"),
             PaymentDate=("PaymentDate", "max"),
-            TransactionID=("TransactionID", lambda x: ", ".join(pd.Series(x).dropna().astype(str).unique())[:500]),
+            TransactionID=("TransactionID",
+                           lambda x: ", ".join(pd.Series(x).dropna().astype(str).unique())[:500]),
         )
-
-        logger.info(f"Bank aggregated: {len(bank_data)} txns → {len(bank_agg)} employees")
+        logger.info(f"Bank aggregated: {len(bank_data)} txns -> {len(bank_agg)} employees")
         return bank_agg
 
-    @staticmethod
     def process_epf_sheet(file_path):
         logger.info(f"Processing EPF sheet: {file_path}")
         

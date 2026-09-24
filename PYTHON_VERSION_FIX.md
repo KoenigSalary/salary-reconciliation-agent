@@ -29,7 +29,7 @@ cd ~/Downloads/Agent/Reconciliation
 source venv/bin/activate
 
 # Verify version (should show 3.11.x)
-python --version
+python3 --version
 
 # Install dependencies
 pip install --upgrade pip
@@ -50,7 +50,7 @@ cd ~/Downloads/Agent/Reconciliation
 pyenv local 3.11.7
 
 # Create venv
-python -m venv venv
+python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
 ```
@@ -103,7 +103,7 @@ cd ~/Downloads/Agent/Reconciliation
 source venv/bin/activate
 
 # Verify version (must be 3.11.x)
-python --version
+python3 --version
 ```
 
 ### Step 3: Install Dependencies
@@ -117,13 +117,13 @@ pip install -r requirements.txt
 ### Step 4: Verify Installation
 
 ```bash
-python -c "import pandas; import selenium; import numpy; print('✅ All packages installed!')"
+python3 -c "import pandas; import selenium; import numpy; print('✅ All packages installed!')"
 ```
 
 ### Step 5: Test Agent
 
 ```bash
-python test_agent.py
+python3 test_agent.py
 ```
 
 ---
@@ -135,7 +135,7 @@ Every time you work with the agent:
 ```bash
 cd ~/Downloads/Agent/Reconciliation
 source venv/bin/activate  # Don't forget this!
-python scheduler.py
+python3 scheduler.py
 ```
 
 ---

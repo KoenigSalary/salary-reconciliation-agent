@@ -27,12 +27,13 @@ class RMSAutomation:
         self.wait = None
         self.download_dir = str(Config.DOWNLOAD_DIR)  # must be string for Chrome prefs
 
-    def setup_driver(self):
+    def setup_driver(self, headed=False):
         """Initialize Chrome driver with download preferences"""
         chrome_options = Options()
 
         # If RMS behaves weird in headless, comment this line and run visible browser
-        chrome_options.add_argument("--headless=new")
+        if not headed:
+            chrome_options.add_argument("--headless=new")
 
         chrome_options.add_argument("--no-sandbox")
         chrome_options.add_argument("--disable-dev-shm-usage")
@@ -91,31 +92,88 @@ class RMSAutomation:
 
         WebDriverWait(self.driver, timeout).until(_has_options)
 
-    def login(self):
-        """Login to RMS portal"""
+    def _select_month_flexible(self, dropdown, month_value):
+        """
+        Select the target month in an RMS month <select>.
+
+        month_value arrives as e.g. "08/1/2026 12:00:00 AM" but the portal's option
+        values are NOT zero-padded ("8/1/2026 12:00:00 AM"), so match tolerantly.
+        """
+        month_num, year, name = "", "", ""
+        try:
+            month_num = month_value.split("/")[0].strip()
+            year = month_value.split("/")[2].split(" ")[0].strip()
+            names = ["", "January", "February", "March", "April", "May", "June", "July",
+                     "August", "September", "October", "November", "December"]
+            if month_num.isdigit():
+                name = names[int(month_num)]
+        except Exception:
+            pass
+
+        opts = [(o.get_attribute("value") or "", o.text.strip()) for o in dropdown.options]
+        logger.info(f"Month dropdown has {len(opts)} option(s): {opts}")
+
+        for val, txt in opts:
+            if year and month_num and year in val and month_num in val:
+                dropdown.select_by_value(val)
+                logger.info(f"Selected month (value match): {val!r} / {txt!r}")
+                return True
+        for val, txt in opts:
+            if name and year and name.lower() in txt.lower() and year in txt:
+                dropdown.select_by_visible_text(txt)
+                logger.info(f"Selected month (text match): {txt!r}")
+                return True
+        for val, txt in opts:
+            if name and name.lower() in txt.lower():
+                dropdown.select_by_visible_text(txt)
+                logger.info(f"Selected month (name only): {txt!r}")
+                return True
+        logger.error(f"Could not select month {month_value!r}. Options: {opts}")
+        return False
+
+    def login(self, **_ignored):
+        """
+        Log in to the RMS portal.
+
+        Verified 2026-09-23 against the live portal. The login page has exactly one
+        field ("Your Official Email") and one button, labelled **Send OTP**. There is
+        no password field and no OTP entry field: clicking Send OTP establishes the
+        session directly, and the landing page then reads
+        "You have logged in.....please select link from menu".
+        """
         try:
             logger.info(f"Navigating to RMS portal: {Config.RMS_URL}")
-            self.driver.get(Config.RMS_URL)
+            self.safe_get(Config.RMS_URL, wait_css="#txtUser", timeout=60)
 
-            username_field = self.wait.until(
-                EC.presence_of_element_located((By.ID, "txtUser"))
-            )
-            username_field.clear()
-            username_field.send_keys(Config.RMS_USERNAME)
+            user = self.wait.until(EC.presence_of_element_located((By.ID, "txtUser")))
+            user.clear()
+            user.send_keys(Config.RMS_USERNAME)
+            logger.info(f"Entered official email: {Config.RMS_USERNAME}")
 
-            password_field = self.driver.find_element(By.ID, "txtPwd")
-            password_field.clear()
-            password_field.send_keys(Config.RMS_PASSWORD)
+            send_otp = self.driver.find_element(By.ID, "btnSubmit")
+            logger.info("Clicking 'Send OTP'")
+            self.driver.execute_script("arguments[0].click();", send_otp)
 
-            submit_button = self.driver.find_element(By.ID, "btnSubmit")
-            submit_button.click()
+            deadline = time.time() + 60
+            while time.time() < deadline:
+                if self._is_logged_in():
+                    logger.info("Successfully logged in to RMS portal")
+                    return True
+                time.sleep(2)
 
-            time.sleep(5)
-            logger.info("Successfully logged in to RMS portal")
-            return True
-
+            raise RuntimeError("Clicking 'Send OTP' did not establish a session.")
         except Exception as e:
             logger.error(f"Login failed: {str(e)}", exc_info=True)
+            return False
+
+    def _is_logged_in(self):
+        """True once the login form is gone / the post-login landing page is shown."""
+        try:
+            if self.driver.find_elements(By.ID, "txtUser"):
+                return False
+            body = self.driver.find_element(By.TAG_NAME, "body").text.lower()
+            return ("you have logged in" in body) or ("select link from menu" in body)
+        except Exception:
             return False
 
     def download_salary_sheet(self, month_value):
@@ -140,7 +198,7 @@ class RMSAutomation:
                     (By.ID, "cphMainContent_mainContent_ddlsalarymonth")
                 ))
             )
-            month_dropdown.select_by_value(month_value)
+            self._select_month_flexible(month_dropdown, month_value)
             logger.info(f"Selected month: {month_value}")
 
             emp_type_dropdown = Select(
@@ -186,7 +244,7 @@ class RMSAutomation:
 
             # Try select by VALUE first (if RMS uses date values)
             try:
-                month_dropdown.select_by_value(month_value)
+                self._select_month_flexible(month_dropdown, month_value)
                 selected = True
                 logger.info(f"Selected TDS month by value: {month_value}")
             except Exception:
