@@ -55,9 +55,30 @@ class ReconciliationEngine:
                 suffixes=("", "_Bank"),
             )
 
-            # Merge EPF data by UAN
+            # Merge EPF data by UAN.
+            # Both sides are normalised to plain digit strings first: the salary
+            # sheet usually carries UAN as an integer while the ECR file carries it
+            # as text, and merging int64 against object either raises or silently
+            # matches nothing at all.
+            def _norm_uan(s):
+                s = s.astype(str).str.strip().str.replace(r"\.0+$", "", regex=True)
+                sci = s.str.contains(r"[eE][+-]?\d+$", regex=True, na=False)
+                if sci.any():
+                    s = s.copy()
+                    nums = pd.to_numeric(s[sci], errors="coerce")
+                    s.loc[sci] = nums.apply(
+                        lambda v: "" if pd.isna(v) else str(int(round(v)))
+                    )
+                return s.str.replace(r"[^\d]", "", regex=True)
+
+            epf_side = self.epf_data.copy()
+            if "UAN" in reconciled.columns:
+                reconciled["UAN"] = _norm_uan(reconciled["UAN"])
+            if "UAN" in epf_side.columns:
+                epf_side["UAN"] = _norm_uan(epf_side["UAN"])
+
             reconciled = reconciled.merge(
-                self.epf_data[["UAN", "EPF_Amount"]],
+                epf_side[["UAN", "EPF_Amount"]],
                 on="UAN",
                 how="left",
                 suffixes=("", "_EPF"),

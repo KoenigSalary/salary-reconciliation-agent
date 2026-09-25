@@ -268,46 +268,137 @@ class DataProcessor:
         logger.info(f"Bank aggregated: {len(bank_data)} txns -> {len(bank_agg)} employees")
         return bank_agg
 
+    # ------------------------------------------------------------------
+    # UAN / EPF ECR helpers
+    # ------------------------------------------------------------------
+    @staticmethod
+    def normalize_uan(series):
+        """
+        Normalise a UAN column to plain digit strings.
+
+        The same UAN arrives in several shapes depending on how the file was read:
+            101134091286         int, or a clean string
+            101134091286.0       float
+            1.01134091286e+11    float - happens whenever the column has blank rows
+        All of them must collapse to "101134091286", otherwise the join against the
+        salary sheet silently matches nothing.
+        """
+        s = series.astype(str).str.strip()
+        s = s.str.replace(r"\.0+$", "", regex=True)
+
+        sci = s.str.contains(r"[eE][+-]?\d+$", regex=True, na=False)
+        if sci.any():
+            s = s.copy()
+            nums = pd.to_numeric(s[sci], errors="coerce")
+            s.loc[sci] = nums.apply(lambda v: "" if pd.isna(v) else str(int(round(v))))
+
+        s = s.str.replace(r"[^\d]", "", regex=True)
+        # A real UAN is a plain 12-digit number; this also drops "", "nan" and
+        # stray "Total" rows.
+        return s.where(s.str.match(r"^\d{6,}$"), "")
+
+    @staticmethod
     def process_epf_sheet(file_path):
+        """
+        Read an EPF ECR export.
+
+        The ECR columns are:
+
+            Sl. No. | UAN | Return | UAN Repository | Gross | EPF | EPS |
+            EDLI | EE | EPS | ER | Refunds | NCP Days
+
+        Only two of them mean anything for reconciliation:
+
+          * UAN  - the key the salary sheet is joined on
+          * EE   - the employee's EPF contribution, i.e. what is deducted from
+                   salary (12% of PF wages)
+
+        Every other column is ignored. Two traps in particular:
+
+          * the column literally named "EPF" is PF *wages* (the base the
+            contribution is calculated on), NOT the contribution. Comparing it
+            against the salary deduction mismatches almost every employee.
+          * "EPS" appears twice, so the contribution column is matched by its
+            exact header "EE" rather than by substring.
+        """
         logger.info(f"Processing EPF sheet: {file_path}")
-        
+
         try:
-            df = DataProcessor.read_excel_file(file_path)
+            raw = DataProcessor.read_excel_file(file_path, header=None)
         except Exception as e:
             logger.error(f"Failed to read EPF file: {e}")
             return pd.DataFrame(columns=["UAN", "EPF_Amount"])
 
-        df.columns = [str(c).strip().lower() for c in df.columns]
-
-        uan_col = None
-        for col in df.columns:
-            if 'uan' in col:
-                uan_col = col
-                break
-
-        epf_col = None
-        for col in df.columns:
-            if 'epf' in col and 'amount' in col:
-                epf_col = col
-                break
-        if not epf_col:
-            for col in df.columns:
-                if 'amount' in col:
-                    epf_col = col
-                    break
-
-        if not uan_col or not epf_col:
-            logger.error(f"EPF missing columns. Found: {df.columns.tolist()}")
+        if raw is None or raw.empty:
+            logger.error("EPF file is empty")
             return pd.DataFrame(columns=["UAN", "EPF_Amount"])
 
-        epf_data = pd.DataFrame({
-            "UAN": df[uan_col].astype(str).str.strip().str.replace(r"\.0$", "", regex=True),
-            "EPF_Amount": pd.to_numeric(df[epf_col], errors="coerce"),
-        })
+        def _clean(v):
+            return str(v).replace("\n", " ").replace("\r", " ").strip().lower()
 
-        epf_data["UAN"] = epf_data["UAN"].replace({"nan": None, "None": None, "": None})
-        epf_data = epf_data[epf_data["UAN"].notna()]
-        epf_data = epf_data[epf_data["EPF_Amount"].notna()]
+        # Find the header row - normally row 1, but do not assume it.
+        header_idx = None
+        for i in range(min(15, len(raw))):
+            cells = [_clean(v) for v in raw.iloc[i].tolist()]
+            if "uan" in cells:
+                header_idx = i
+                break
+
+        if header_idx is None:
+            logger.error("EPF: no row containing a 'UAN' header found in the first 15 rows")
+            return pd.DataFrame(columns=["UAN", "EPF_Amount"])
+
+        headers = [_clean(v) for v in raw.iloc[header_idx].tolist()]
+        n = len(headers)
+        data = raw.iloc[header_idx + 1:].iloc[:, :n].copy()
+        for c in range(data.shape[1], n):
+            data[c] = np.nan
+        data.columns = range(n)
+
+        def _find(name, exact=True):
+            """Index of the first header matching `name` (exact first, then substring)."""
+            if exact:
+                for idx, h in enumerate(headers):
+                    if h == name:
+                        return idx
+                return None
+            for idx, h in enumerate(headers):
+                if name in h:
+                    return idx
+            return None
+
+        uan_idx = _find("uan")
+        if uan_idx is None:
+            uan_idx = _find("uan", exact=False)
+
+        # Exact "EE" first (ECR); fall back to older "EPF Amount" style files.
+        amount_idx = _find("ee")
+        if amount_idx is None:
+            amount_idx = _find("epf amount", exact=False)
+        if amount_idx is None:
+            amount_idx = _find("amount", exact=False)
+
+        if uan_idx is None or amount_idx is None:
+            logger.error(
+                f"EPF missing columns. Headers found: {headers}. "
+                f"Expected a 'UAN' column and an 'EE' column."
+            )
+            return pd.DataFrame(columns=["UAN", "EPF_Amount"])
+
+        logger.info(
+            f"EPF columns -> UAN: '{headers[uan_idx]}' (col {uan_idx + 1}), "
+            f"amount: '{headers[amount_idx]}' (col {amount_idx + 1}), "
+            f"header row {header_idx + 1}. All other columns ignored."
+        )
+
+        epf_data = pd.DataFrame({
+            "UAN": DataProcessor.normalize_uan(data[uan_idx]),
+            "EPF_Amount": pd.to_numeric(data[amount_idx], errors="coerce"),
+        })
+        epf_data = epf_data[epf_data["UAN"] != ""]
+
+        # A member can appear on several ECR lines; the contribution is cumulative.
+        epf_data = epf_data.groupby("UAN", as_index=False)["EPF_Amount"].sum(min_count=1)
 
         logger.info(f"Processed {len(epf_data)} EPF records")
         return epf_data

@@ -364,3 +364,22 @@ python3 scheduler.py --status    # what is due, what already ran
 
 Full details - schedule, catch-up, the per-month ledger that stops double sends,
 and the Streamlit-versus-automation split - are in **[AUTOMATION.md](AUTOMATION.md)**.
+
+### EPF file: which columns are used
+
+The EPF input is the ECR export, whose columns are:
+
+`Sl. No. | UAN | Return | UAN Repository | Gross | EPF | EPS | EDLI | EE | EPS | ER | Refunds | NCP Days`
+
+Reconciliation uses **only two** of them:
+
+* **UAN** — the key the salary sheet is joined on
+* **EE** — the employee's EPF contribution (12% of PF wages), i.e. what is
+  deducted from salary
+
+Everything else is ignored. Two traps worth knowing:
+
+* The column named **`EPF`** is PF *wages* (the base), **not** the contribution.
+  Comparing it against the salary deduction mismatches nearly every employee.
+* **`EPS` appears twice** in the header, so the contribution column is matched by
+  its exact header `EE` rather than by substring.

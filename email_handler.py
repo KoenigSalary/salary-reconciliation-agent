@@ -13,6 +13,7 @@ import logging
 from pathlib import Path
 from datetime import datetime
 from config import Config
+from recon_core import read_report_sheet
 
 logger = logging.getLogger(__name__)
 
@@ -198,9 +199,12 @@ Salary Reconciliation Agent
 
         # -------- Build detailed tables HTML from Excel report --------
         try:
-            branch_df = pd.read_excel(report_file, sheet_name="Branch Wise")
-            dept_df = pd.read_excel(report_file, sheet_name="Department Wise")
-            desig_df = pd.read_excel(report_file, sheet_name="Designation Wise")
+            # read_report_sheet skips the title row the generator writes above
+            # the headers - a plain read_excel turns that title into the header
+            # and the emailed table arrives as "Unnamed: 1 ... Unnamed: 9".
+            branch_df = read_report_sheet(report_file, "Branch Wise")
+            dept_df = read_report_sheet(report_file, "Department Wise")
+            desig_df = read_report_sheet(report_file, "Designation Wise")
 
             extra_tables_html = (
                 '<div class="summary-box">'

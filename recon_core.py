@@ -14,6 +14,7 @@ run_reconciliation(...)          -> dict(report_path, summary, counts, engine)
 import glob
 import logging
 import numpy as np
+import pandas as pd
 import os
 from datetime import datetime
 from pathlib import Path
@@ -21,6 +22,34 @@ from pathlib import Path
 from config import Config
 from data_processor import DataProcessor
 from reconciliation_engine import ReconciliationEngine
+
+def read_report_sheet(src, sheet_name):
+    """
+    Read one sheet from a generated report, skipping the title rows.
+
+    save_reports() writes a merged title row at row 1 and leaves row 2 blank, so
+    the real column headers land on row 3. A naive header=0 read turns the title
+    into the header and yields 'Unnamed: 1' ... 'Unnamed: 9' columns, with the
+    real headers pushed down as a data row - which is exactly how the emailed
+    summary tables used to arrive.
+
+    Detect the header row instead (the first row with 3+ populated cells).
+    """
+    raw = pd.read_excel(src, sheet_name=sheet_name, header=None)
+    if raw.empty:
+        return raw
+
+    header_idx = 0
+    for i in range(min(5, len(raw))):
+        if raw.iloc[i].notna().sum() >= 3:
+            header_idx = i
+            break
+
+    df = raw.iloc[header_idx + 1:].copy()
+    df.columns = [str(v).strip() for v in raw.iloc[header_idx].tolist()]
+    df = df.loc[:, ~df.columns.astype(str).str.startswith("Unnamed")]
+    return df.dropna(how="all").reset_index(drop=True)
+
 
 logger = logging.getLogger(__name__)
 

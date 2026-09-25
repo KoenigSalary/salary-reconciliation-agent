@@ -3,7 +3,7 @@
 # hard pin on numpy/lxml breaks the build on Python 3.13 (no wheels -> pip tries
 # to compile from source -> installer exits non-zero).
 # numpy is intentionally NOT listed - pandas resolves a compatible version itself.
-streamlit>=1.50,<2
+streamlit>=1.41,<2
 pandas>=2.2,<3
 openpyxl>=3.1,<4
 lxml>=5.3
